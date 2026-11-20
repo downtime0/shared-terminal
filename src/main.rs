@@ -1,7 +1,10 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -382,59 +385,81 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
             chat_scroll,
         )?;
         if event::poll(Duration::from_millis(40))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Release {
-                    continue;
-                }
-                if key.code == KeyCode::F(2) {
-                    chat_mode = !chat_mode;
-                } else if chat_mode {
-                    match key.code {
-                        KeyCode::Esc => {
-                            chat_mode = false;
-                            chat_input.clear();
-                        }
-                        KeyCode::Enter => {
-                            if !chat_input.trim().is_empty() {
-                                if let Ok(mut messages) = chat.lock() {
-                                    messages.push(ChatMessage {
-                                        role: "user".into(),
-                                        text: chat_input.clone(),
-                                    });
-                                }
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind == KeyEventKind::Release {
+                        continue;
+                    }
+                    if key.code == KeyCode::F(2) {
+                        chat_mode = !chat_mode;
+                    } else if chat_mode {
+                        match key.code {
+                            KeyCode::Esc => {
+                                chat_mode = false;
                                 chat_input.clear();
-                                chat_scroll = 0;
                             }
+                            KeyCode::Enter => {
+                                if !chat_input.trim().is_empty() {
+                                    if let Ok(mut messages) = chat.lock() {
+                                        messages.push(ChatMessage {
+                                            role: "user".into(),
+                                            text: chat_input.clone(),
+                                        });
+                                    }
+                                    chat_input.clear();
+                                    chat_scroll = 0;
+                                }
+                            }
+                            KeyCode::Up => chat_scroll = chat_scroll.saturating_add(1),
+                            KeyCode::Down => chat_scroll = chat_scroll.saturating_sub(1),
+                            KeyCode::PageUp => chat_scroll = chat_scroll.saturating_add(5),
+                            KeyCode::PageDown => chat_scroll = chat_scroll.saturating_sub(5),
+                            KeyCode::Backspace => {
+                                chat_input.pop();
+                            }
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                chat_input.push(c)
+                            }
+                            _ => {}
                         }
-                        KeyCode::PageUp => chat_scroll = chat_scroll.saturating_add(5),
-                        KeyCode::PageDown => chat_scroll = chat_scroll.saturating_sub(5),
-                        KeyCode::Backspace => {
-                            chat_input.pop();
+                    } else if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        let _ = writer.lock().map(|mut w| w.write_all(&[3]));
+                    } else if key.code == KeyCode::F(10)
+                        || (key.code == KeyCode::Char('q')
+                            && key.modifiers.contains(KeyModifiers::CONTROL))
+                    {
+                        break;
+                    } else if key.code == KeyCode::PageUp {
+                        scroll = scroll.saturating_add(20);
+                    } else if key.code == KeyCode::PageDown {
+                        scroll = scroll.saturating_sub(20);
+                    } else {
+                        let bytes = key_to_bytes(key);
+                        if !bytes.is_empty() {
+                            let _ = writer.lock().map(|mut w| w.write_all(&bytes));
                         }
-                        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            chat_input.push(c)
-                        }
-                        _ => {}
-                    }
-                } else if key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                {
-                    let _ = writer.lock().map(|mut w| w.write_all(&[3]));
-                } else if key.code == KeyCode::F(10)
-                    || (key.code == KeyCode::Char('q')
-                        && key.modifiers.contains(KeyModifiers::CONTROL))
-                {
-                    break;
-                } else if key.code == KeyCode::PageUp {
-                    scroll = scroll.saturating_add(20);
-                } else if key.code == KeyCode::PageDown {
-                    scroll = scroll.saturating_sub(20);
-                } else {
-                    let bytes = key_to_bytes(key);
-                    if !bytes.is_empty() {
-                        let _ = writer.lock().map(|mut w| w.write_all(&bytes));
                     }
                 }
+                Event::Mouse(mouse) => {
+                    let size = terminal.size()?;
+                    let area = chat_area(ratatui::layout::Rect::new(0, 0, size.width, size.height));
+                    if mouse.column >= area.x
+                        && mouse.column < area.x + area.width
+                        && mouse.row >= area.y
+                        && mouse.row < area.y + area.height
+                    {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => chat_scroll = chat_scroll.saturating_add(3),
+                            MouseEventKind::ScrollDown => {
+                                chat_scroll = chat_scroll.saturating_sub(3)
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         if child.try_wait()?.is_some() {
@@ -675,16 +700,31 @@ fn draw(
     Ok(())
 }
 
+fn chat_area(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(68),
+            Constraint::Min(5),
+            Constraint::Length(1),
+        ])
+        .split(area)[1]
+}
+
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     Terminal::new(CrosstermBackend::new(stdout)).context("failed to initialize TUI")
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }
