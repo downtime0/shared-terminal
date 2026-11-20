@@ -1,0 +1,21 @@
+[package]
+name = "agent-terminal"
+version = "0.1.0"
+edition = "2024"
+description = "A small shared SSH terminal for people and coding agents"
+license = "MIT"
+
+[[bin]]
+name = "agent-terminal"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+portable-pty = "0.9"
+ratatui = "0.29"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+vt100 = "0.15"
+
