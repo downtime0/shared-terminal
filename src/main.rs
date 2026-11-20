@@ -1,10 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseEventKind,
-    },
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -50,10 +47,6 @@ enum AgentCommand {
     Send { text: String },
     /// Check whether a shared session is running
     Status,
-    /// Read messages from the TUI conversation
-    ChatRead,
-    /// Post a message in the TUI conversation as the agent
-    ChatSay { text: String },
     /// Run this process as an MCP stdio server for Codex
     Mcp,
 }
@@ -63,8 +56,6 @@ struct Request {
     action: String,
     text: Option<String>,
     lines: Option<usize>,
-    after: Option<usize>,
-    timeout_ms: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,14 +66,6 @@ struct Response {
 
 type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 type Transcript = Arc<Mutex<String>>;
-type Chat = Arc<Mutex<Vec<ChatMessage>>>;
-
-#[derive(Clone, Serialize, Deserialize)]
-struct ChatMessage {
-    role: String,
-    text: String,
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     if let Some(command) = cli.command {
@@ -111,36 +94,16 @@ fn agent_command(command: AgentCommand) -> Result<()> {
             action: "read".into(),
             text: None,
             lines: Some(lines),
-            after: None,
-            timeout_ms: None,
         },
         AgentCommand::Send { text } => Request {
             action: "send".into(),
             text: Some(text),
             lines: None,
-            after: None,
-            timeout_ms: None,
         },
         AgentCommand::Status => Request {
             action: "status".into(),
             text: None,
             lines: None,
-            after: None,
-            timeout_ms: None,
-        },
-        AgentCommand::ChatRead => Request {
-            action: "chat_read".into(),
-            text: None,
-            lines: None,
-            after: None,
-            timeout_ms: None,
-        },
-        AgentCommand::ChatSay { text } => Request {
-            action: "chat_send".into(),
-            text: Some(text),
-            lines: None,
-            after: None,
-            timeout_ms: None,
         },
         AgentCommand::Mcp => unreachable!(),
     };
@@ -198,9 +161,6 @@ fn run_mcp() -> Result<()> {
             "tools/list" => serde_json::json!({"tools": [
                 {"name":"terminal_read","description":"Read the current rendered SSH terminal screen.","inputSchema":{"type":"object","properties":{}}},
                 {"name":"terminal_send","description":"Type a command into the shared SSH session and press Enter. This executes remotely.","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}},
-                {"name":"chat_read","description":"Read user and agent messages in the TUI conversation.","inputSchema":{"type":"object","properties":{}}},
-                {"name":"chat_wait","description":"Wait up to 25 seconds for a new user message in the TUI conversation.","inputSchema":{"type":"object","properties":{"after":{"type":"integer","description":"Message count already seen"}}}},
-                {"name":"chat_send","description":"Post a reply in the TUI conversation so the user sees it there.","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}},
                 {"name":"session_status","description":"Check whether the shared SSH TUI is running.","inputSchema":{"type":"object","properties":{}}}
             ]}),
             "tools/call" => {
@@ -212,30 +172,13 @@ fn run_mcp() -> Result<()> {
                     .pointer("/params/arguments")
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
-                let (action, text, after, timeout_ms) = match name {
-                    "terminal_read" => ("read", None, None, None),
+                let (action, text) = match name {
+                    "terminal_read" => ("read", None),
                     "terminal_send" => (
                         "send",
                         args.get("text").and_then(|v| v.as_str()).map(str::to_owned),
-                        None,
-                        None,
                     ),
-                    "chat_read" => ("chat_read", None, None, None),
-                    "chat_wait" => (
-                        "chat_wait",
-                        None,
-                        args.get("after")
-                            .and_then(|v| v.as_u64())
-                            .map(|n| n as usize),
-                        Some(25_000),
-                    ),
-                    "chat_send" => (
-                        "chat_send",
-                        args.get("text").and_then(|v| v.as_str()).map(str::to_owned),
-                        None,
-                        None,
-                    ),
-                    "session_status" => ("status", None, None, None),
+                    "session_status" => ("status", None),
                     _ => {
                         write_rpc(
                             &mut stdout,
@@ -249,8 +192,6 @@ fn run_mcp() -> Result<()> {
                     action: action.into(),
                     text,
                     lines: None,
-                    after,
-                    timeout_ms,
                 }) {
                     Ok(message) => {
                         serde_json::json!({"content":[{"type":"text","text":message}],"isError":false})
@@ -322,7 +263,6 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
 
     let writer: SharedWriter = Arc::new(Mutex::new(pair.master.take_writer()?));
     let transcript: Transcript = Arc::new(Mutex::new(String::new()));
-    let chat: Chat = Arc::new(Mutex::new(Vec::new()));
     let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>();
     let mut reader = pair.master.try_clone_reader()?;
     thread::spawn(move || {
@@ -347,14 +287,12 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     let agent_writer = Arc::clone(&writer);
     let agent_transcript = Arc::clone(&transcript);
-    let agent_chat = Arc::clone(&chat);
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let writer = Arc::clone(&agent_writer);
             let transcript = Arc::clone(&agent_transcript);
-            let chat = Arc::clone(&agent_chat);
             thread::spawn(move || {
-                let _ = handle_agent(stream, &writer, &transcript, &chat);
+                let _ = handle_agent(stream, &writer, &transcript);
             });
         }
     });
@@ -363,9 +301,6 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
     let mut parser = vt100::Parser::new(rows, cols, 2_000);
     let mut status = format!("SSH: {destination}");
     let mut scroll = 0usize;
-    let mut chat_scroll = 0usize;
-    let mut chat_mode = false;
-    let mut chat_input = String::new();
     loop {
         while let Ok(bytes) = output_rx.try_recv() {
             parser.process(&bytes);
@@ -375,56 +310,14 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
             }
         }
         let screen = transcript.lock().map(|s| s.clone()).unwrap_or_default();
-        let messages = chat.lock().map(|m| m.clone()).unwrap_or_default();
-        draw(
-            &mut terminal,
-            &screen,
-            &status,
-            scroll,
-            &messages,
-            &chat_input,
-            chat_mode,
-            chat_scroll,
-        )?;
+        draw(&mut terminal, &screen, &status, scroll)?;
         if event::poll(Duration::from_millis(40))? {
             match event::read()? {
                 Event::Key(key) => {
                     if key.kind == KeyEventKind::Release {
                         continue;
                     }
-                    if key.code == KeyCode::F(2) {
-                        chat_mode = !chat_mode;
-                    } else if chat_mode {
-                        match key.code {
-                            KeyCode::Esc => {
-                                chat_mode = false;
-                                chat_input.clear();
-                            }
-                            KeyCode::Enter => {
-                                if !chat_input.trim().is_empty() {
-                                    if let Ok(mut messages) = chat.lock() {
-                                        messages.push(ChatMessage {
-                                            role: "user".into(),
-                                            text: chat_input.clone(),
-                                        });
-                                    }
-                                    chat_input.clear();
-                                    chat_scroll = 0;
-                                }
-                            }
-                            KeyCode::Up => chat_scroll = chat_scroll.saturating_add(1),
-                            KeyCode::Down => chat_scroll = chat_scroll.saturating_sub(1),
-                            KeyCode::PageUp => chat_scroll = chat_scroll.saturating_add(5),
-                            KeyCode::PageDown => chat_scroll = chat_scroll.saturating_sub(5),
-                            KeyCode::Backspace => {
-                                chat_input.pop();
-                            }
-                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                chat_input.push(c)
-                            }
-                            _ => {}
-                        }
-                    } else if key.code == KeyCode::Char('c')
+                    if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         let _ = writer.lock().map(|mut w| w.write_all(&[3]));
@@ -441,23 +334,6 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
                         let bytes = key_to_bytes(key);
                         if !bytes.is_empty() {
                             let _ = writer.lock().map(|mut w| w.write_all(&bytes));
-                        }
-                    }
-                }
-                Event::Mouse(mouse) => {
-                    let size = terminal.size()?;
-                    let area = chat_area(ratatui::layout::Rect::new(0, 0, size.width, size.height));
-                    if mouse.column >= area.x
-                        && mouse.column < area.x + area.width
-                        && mouse.row >= area.y
-                        && mouse.row < area.y + area.height
-                    {
-                        match mouse.kind {
-                            MouseEventKind::ScrollUp => chat_scroll = chat_scroll.saturating_add(3),
-                            MouseEventKind::ScrollDown => {
-                                chat_scroll = chat_scroll.saturating_sub(3)
-                            }
-                            _ => {}
                         }
                     }
                 }
@@ -487,7 +363,6 @@ fn handle_agent(
     mut stream: std::os::unix::net::UnixStream,
     writer: &SharedWriter,
     transcript: &Transcript,
-    chat: &Chat,
 ) -> Result<()> {
     let mut line = String::new();
     BufReader::new(&stream).read_line(&mut line)?;
@@ -518,40 +393,6 @@ fn handle_agent(
                     .map_err(|_| anyhow::anyhow!("terminal unavailable"))?
                     .write_all(text.as_bytes())?;
                 Ok("sent to shared SSH session".into())
-            }
-            "chat_read" => {
-                let messages = chat
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("chat unavailable"))?;
-                Ok(serde_json::to_string(&*messages)?)
-            }
-            "chat_wait" => {
-                let after = request.after.unwrap_or(0);
-                let timeout =
-                    Duration::from_millis(request.timeout_ms.unwrap_or(25_000).min(25_000));
-                let start = std::time::Instant::now();
-                loop {
-                    let messages = chat
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("chat unavailable"))?;
-                    if messages.len() > after {
-                        return Ok(serde_json::to_string(&messages[after..])?);
-                    }
-                    if start.elapsed() >= timeout {
-                        return Ok("No new user message before timeout.".into());
-                    }
-                    drop(messages);
-                    thread::sleep(Duration::from_millis(100));
-                }
-            }
-            "chat_send" => {
-                chat.lock()
-                    .map_err(|_| anyhow::anyhow!("chat unavailable"))?
-                    .push(ChatMessage {
-                        role: "agent".into(),
-                        text: request.text.unwrap_or_default(),
-                    });
-                Ok("message shown in TUI".into())
             }
             _ => bail!("unknown action"),
         }
@@ -597,20 +438,12 @@ fn draw(
     screen: &str,
     status: &str,
     scroll: usize,
-    messages: &[ChatMessage],
-    chat_input: &str,
-    chat_mode: bool,
-    chat_scroll: usize,
 ) -> Result<()> {
     terminal.draw(|frame| {
-        let root = Layout::default()
+        let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(5), Constraint::Length(1)])
             .split(frame.area());
-        let panels = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-            .split(root[0]);
         let lines: Vec<Line> = screen.lines().map(Line::from).collect();
         let block = Block::default()
             .borders(Borders::ALL)
@@ -618,81 +451,12 @@ fn draw(
         let mut view = Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false });
-        let available = panels[0].height.saturating_sub(2) as usize;
+        let available = chunks[0].height.saturating_sub(2) as usize;
         let total = screen.lines().count();
         let bottom = total.saturating_sub(scroll);
         let top = bottom.saturating_sub(available);
         view = view.scroll((top.min(u16::MAX as usize) as u16, 0));
-        frame.render_widget(view, panels[0]);
-        let chat_lines: Vec<Line> = messages
-            .iter()
-            .map(|m| {
-                let (label, color) = if m.role == "agent" {
-                    ("AGENT", Color::Cyan)
-                } else {
-                    ("YOU", Color::Yellow)
-                };
-                Line::from(vec![
-                    Span::styled(
-                        format!("{label}  "),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(m.text.clone()),
-                ])
-            })
-            .collect();
-        let chat_title = if chat_mode {
-            " Conversation · typing here · Enter sends · Esc returns "
-        } else {
-            " Conversation · F2 to message agent "
-        };
-        let chat_block = Block::default().borders(Borders::ALL).title(chat_title);
-        let chat_inner = chat_block.inner(panels[1]);
-        frame.render_widget(chat_block, panels[1]);
-        let history_height = chat_inner.height.saturating_sub(1);
-        let history_area = ratatui::layout::Rect::new(
-            chat_inner.x,
-            chat_inner.y,
-            chat_inner.width,
-            history_height,
-        );
-        let content_height = chat_lines
-            .iter()
-            .map(|line| {
-                let chars = line
-                    .spans
-                    .iter()
-                    .map(|span| span.content.chars().count())
-                    .sum::<usize>();
-                chars.div_ceil(history_area.width.max(1) as usize).max(1)
-            })
-            .sum::<usize>();
-        let chat_content = Paragraph::new(chat_lines).wrap(Wrap { trim: false });
-        let max_scroll = content_height.saturating_sub(history_area.height as usize);
-        let offset = max_scroll
-            .saturating_sub(chat_scroll)
-            .min(u16::MAX as usize) as u16;
-        frame.render_widget(chat_content.scroll((offset, 0)), history_area);
-        let input_y = chat_inner.y + history_height;
-        if chat_mode && chat_inner.height > 0 {
-            frame.render_widget(
-                Paragraph::new(format!("> {chat_input}")),
-                ratatui::layout::Rect::new(chat_inner.x, input_y, chat_inner.width, 1),
-            );
-            frame.set_cursor_position((
-                (chat_inner.x + 2 + chat_input.chars().count() as u16)
-                    .min(chat_inner.x + chat_inner.width.saturating_sub(1)),
-                input_y,
-            ));
-        } else if chat_inner.height > 0 {
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    "F2 to type · PgUp/PgDn to scroll",
-                    Style::default().fg(Color::DarkGray),
-                )),
-                ratatui::layout::Rect::new(chat_inner.x, input_y, chat_inner.width, 1),
-            );
-        }
+        frame.render_widget(view, chunks[0]);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
@@ -703,29 +467,17 @@ fn draw(
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(format!(
-                    " {status}  ·  F2 chat  ·  PgUp/PgDn scroll  ·  F10 quit"
+                    " {status}  ·  PgUp/PgDn scroll  ·  Ctrl+C interrupt  ·  F10 quit"
                 )),
             ])),
-            root[1],
+            chunks[1],
         );
     })?;
     Ok(())
 }
 
-fn chat_area(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
-    let root = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(1)])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(root[0])[1]
-}
-
 fn ssh_dimensions(width: u16, height: u16) -> (u16, u16) {
-    let terminal_width = width.saturating_mul(65) / 100;
-    let cols = terminal_width.saturating_sub(2).max(10);
+    let cols = width.saturating_sub(2).max(10);
     let rows = height.saturating_sub(3).max(3);
     (rows, cols)
 }
@@ -733,17 +485,13 @@ fn ssh_dimensions(width: u16, height: u16) -> (u16, u16) {
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     Terminal::new(CrosstermBackend::new(stdout)).context("failed to initialize TUI")
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
 }
