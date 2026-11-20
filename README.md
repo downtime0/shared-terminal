@@ -25,9 +25,16 @@ From this repository, build and install the executable:
 cargo install --path .
 ```
 
-Cargo installs it as `~/.cargo/bin/shared-terminal`. Make sure `~/.cargo/bin` is
-on `PATH`, or use the full path in the commands below. To install the included
-man page for your user:
+Cargo installs it as `~/.cargo/bin/shared-terminal`. Add Cargo's bin directory
+to `PATH` so you can run `shared-terminal` directly:
+
+```sh
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+If you use a shell other than Bash, add `~/.cargo/bin` to that shell's startup
+file instead. To install the included man page for your user:
 
 ```sh
 install -Dm644 man/shared-terminal.1 ~/.local/share/man/man1/shared-terminal.1
@@ -74,18 +81,6 @@ The agent can use `terminal_read` to inspect command output, then send follow-up
 commands with `terminal_send`. The MCP server cannot create or reconnect an SSH
 session; start the visible TUI first. The MCP server only exposes terminal
 controls. It does not provide chat or start a separate Codex conversation.
-
-### Upgrading from agent-terminal
-
-After installing this version, replace the old Codex registration and restart
-Codex:
-
-    cargo install --path .
-    codex mcp remove agent-terminal
-    codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
-
-Exit any old agent-terminal TUI with F12, then start shared-terminal again.
-The renamed app uses a new local session socket.
 
 The same tools are available through the local CLI while a TUI session is
 running:
