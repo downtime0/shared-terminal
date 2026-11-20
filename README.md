@@ -1,28 +1,33 @@
 # shared-terminal
 
-`shared-terminal` opens one visible terminal session that a person and a coding
-agent can share. Run a local shell or connect to a remote host over SSH. The
-person types into the TUI as usual. A connected agent can check whether the
-session is running, read recent terminal output, and send input through MCP.
-Keep the conversation with the agent in Codex; this app is the shared terminal,
-not a chat client.
+`shared-terminal` is a local, single-user bridge (MCP service) for sharing one live terminal
+session with a coding agent session with the intent of having clear visibility into what 
+commands the agent is sending to the remote host as well as being able to interact
+and type your own commands into the shared terminal when needed. 
 
+Start your local shell to connect to a remote host over SSH in the visible TUI. 
+Give the agent session pompts to connected through the MCP to read recent terminal
+output and send text instructions. Commands run with the permissions of the 
+active local or remote account. 
 
-## Scope
+Keep the conversation in your agent session (TUI or GUI).
 
-This is a local, single-user bridge between one TUI and one MCP process. It
-expects the agent and TUI to run as the same local user on the same machine. It
-does not implement SSH itself, manage multiple sessions, or retain a durable
-terminal transcript after the TUI exits.
+`shared-terminal` is not a chat client.
+
+Run the TUI and MCP server as the same user on the same machine. The app uses
+your system SSH client, does not store SSH credentials, supports one shared
+session at a time, and does not keep a terminal transcript after the TUI exits.
 
 ## Expected Workflow (after installation)
 
 1. Open two terminals.
 2. In first terminal, start `shared-terminal --local` or `shared-terminal root@192.168.1.190` (maybe snap it to the right side of your screen)
-    - if starting a ssh session, you may be propted for you password next
+    - if starting a ssh session, you may be propted for your password next
 3. In second terminal, start your agent (i.e. `codex` or `claud`, etc...) (maybe snap it to the left side of the screen)
     - tell your agent to connect to the shared-terminal mcp (the mcp should have previously been registered during install)
     - once connected, give your agent a prompt for the shared terminal (i.e. `check the disk health`)
+
+The user is expected to prompt the agent via the agent session but also interact with the shared terminal manually entering commands or typing in passwords or pasteing tokens, while also having visibility to the agents actions, i.e. when troublshooting or running routine maintenance.
 
 I hope you get the point. Use this for visiblity into agents working in your ssh or local environments.
 
@@ -38,10 +43,18 @@ app does not store SSH credentials.
 
 ## Install
 
-From this repository, build and install the executable:
+From this repository, build the executable:
 
 ```sh
-cargo install --path .
+cargo build --release
+```
+
+The binary is written to `target/release/shared-terminal`. To install or update
+the command in `~/.cargo/bin`, force replacement of any previously installed
+version:
+
+```sh
+cargo install --path . --force
 ```
 
 Cargo installs it as `~/.cargo/bin/shared-terminal`. Add Cargo's bin directory
@@ -60,7 +73,7 @@ install -Dm644 man/shared-terminal.1 ~/.local/share/man/man1/shared-terminal.1
 man shared-terminal
 ```
 
-## Connect Codex with MCP
+## Register MCP with Codex
 
 Register the MCP server with Codex:
 
@@ -68,8 +81,9 @@ Register the MCP server with Codex:
 codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
 ```
 
-Restart Codex after registering. Start `shared-terminal --local` or
-`shared-terminal user@host` in a visible terminal, then use Codex in that same
+If Codex is already running you need to exit and restart Codex after registering. 
+Start `shared-terminal --local` 
+or `shared-terminal user@host` in a visible terminal, then use Codex in that same
 user account. The agent and person share that live session:
 
 1. `session_status` checks that the visible TUI is running.
@@ -83,7 +97,7 @@ commands with `terminal_send`. The MCP server cannot create or reconnect an SSH
 session; start the visible TUI first. The MCP server only exposes terminal
 controls. It does not provide chat or start a separate Codex conversation.
 
-## Start a session
+## Start a local session
 
 Start a shared local shell:
 
@@ -94,6 +108,8 @@ shared-terminal --local
 The app runs your configured `$SHELL` interactively inside the TUI. You and the
 agent share that local shell, so commands sent by the agent run on your machine
 as your user.
+
+## Start a SSH session (most common intended use)
 
 To connect to a remote host, pass an SSH destination. Run the TUI in the
 foreground in a terminal window to keep the session visible and available to
@@ -109,10 +125,54 @@ SSH options go after `--` and are passed directly to `ssh`:
 shared-terminal root@server -- -p 2222 -i ~/.ssh/work_key
 ```
 
-Type into the terminal normally. `Ctrl+C` sends an interrupt to the active
-process. `Page Up` and `Page Down` scroll the displayed terminal. `F12` exits
-the TUI and closes its shell or SSH process. Run one session at a time for your
-user.
+### Alternatively while working with the code, use `cargo run`
+
+```
+cargo run -- root@192.168.1.95
+```
+
+## shared-terminal Commands
+
+You may type into the shared-terminal normally as with any other terminal. 
+
+- `Ctrl+C` sends an interrupt to the active process. 
+- `Page Up` and `Page Down` scroll the displayed terminal. 
+- `F12` exits the TUI and closes its shell or SSH process. 
+
+Run one session at a time for your user.
+
+## Once a session is started...
+
+Give your agent a prompt regarding the shared terminal session:
+
+i.e.
+
+```
+Use the shared terminal to check disk space on the connected machine. Don’t make changes unless asked.
+```
+
+---
+
+---
+
+## After making changes to the code, Rebuild and refresh the Codex MCP registration
+
+After changing the code, run these commands from the repository root to build
+and replace the installed executable, then remove and recreate the Codex MCP
+entry:
+
+```sh
+cargo build --release
+cargo install --path . --force
+codex mcp remove shared-terminal
+codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
+```
+
+Restart Codex after re-registering so it starts the updated MCP server. The
+`codex mcp add` command has no `--force` option; removing the existing entry
+first ensures the new registration replaces it. Start a fresh terminal session
+with `shared-terminal --local` or `shared-terminal user@host` to use the newly
+installed TUI as well.
 
 ## Security and secrets
 
