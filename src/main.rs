@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     env,
     io::{self, BufRead, BufReader, Read, Write},
+    num::NonZeroU16,
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
     thread,
@@ -325,7 +326,11 @@ fn run_tui(destination: Option<String>, ssh_args: Vec<String>) -> Result<()> {
     });
 
     let mut terminal = setup_terminal()?;
-    let mut parser = vt100::Parser::new(rows, cols, 2_000);
+    let mut parser = vt100::Parser::new(
+        NonZeroU16::new(rows).expect("terminal rows are clamped to a nonzero value"),
+        NonZeroU16::new(cols).expect("terminal columns are clamped to a nonzero value"),
+        2_000,
+    );
     let mut scroll = 0usize;
     loop {
         while let Ok(bytes) = output_rx.try_recv() {
@@ -371,7 +376,12 @@ fn run_tui(destination: Option<String>, ssh_args: Vec<String>) -> Result<()> {
                         pixel_width: 0,
                         pixel_height: 0,
                     })?;
-                    parser.set_size(rows, cols);
+                    parser.set_size(
+                        NonZeroU16::new(rows)
+                            .expect("terminal rows are clamped to a nonzero value"),
+                        NonZeroU16::new(cols)
+                            .expect("terminal columns are clamped to a nonzero value"),
+                    );
                 }
                 _ => {}
             }
