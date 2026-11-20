@@ -7,6 +7,25 @@ session is running, read recent terminal output, and send input through MCP.
 Keep the conversation with the agent in Codex; this app is the shared terminal,
 not a chat client.
 
+
+## Scope
+
+This is a local, single-user bridge between one TUI and one MCP process. It
+expects the agent and TUI to run as the same local user on the same machine. It
+does not implement SSH itself, manage multiple sessions, or retain a durable
+terminal transcript after the TUI exits.
+
+## Expected Workflow (after installation)
+
+1. Open two terminals.
+2. In first terminal, start `shared-terminal --local` or `shared-terminal root@192.168.1.190` (maybe snap it to the right side of your screen)
+    - if starting a ssh session, you may be propted for you password next
+3. In second terminal, start your agent (i.e. `codex` or `claud`, etc...) (maybe snap it to the left side of the screen)
+    - tell your agent to connect to the shared-terminal mcp (the mcp should have previously been registered during install)
+    - once connected, give your agent a prompt for the shared terminal (i.e. `check the disk health`)
+
+I hope you get the point. Use this for visiblity into agents working in your ssh or local environments.
+
 ## Requirements
 
 - Linux or another Unix-like system with a working terminal
@@ -41,6 +60,29 @@ install -Dm644 man/shared-terminal.1 ~/.local/share/man/man1/shared-terminal.1
 man shared-terminal
 ```
 
+## Connect Codex with MCP
+
+Register the MCP server with Codex:
+
+```sh
+codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
+```
+
+Restart Codex after registering. Start `shared-terminal --local` or
+`shared-terminal user@host` in a visible terminal, then use Codex in that same
+user account. The agent and person share that live session:
+
+1. `session_status` checks that the visible TUI is running.
+2. `terminal_read` reads up to 120 recent lines from the rendered terminal.
+3. `terminal_send` types the supplied text into the session and presses Enter.
+   It runs locally in local mode or on the remote host in SSH mode, and is
+   visible in the TUI.
+
+The agent can use `terminal_read` to inspect command output, then send follow-up
+commands with `terminal_send`. The MCP server cannot create or reconnect an SSH
+session; start the visible TUI first. The MCP server only exposes terminal
+controls. It does not provide chat or start a separate Codex conversation.
+
 ## Start a session
 
 Start a shared local shell:
@@ -72,29 +114,6 @@ process. `Page Up` and `Page Down` scroll the displayed terminal. `F12` exits
 the TUI and closes its shell or SSH process. Run one session at a time for your
 user.
 
-## Connect Codex with MCP
-
-Register the MCP server with Codex:
-
-```sh
-codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
-```
-
-Restart Codex after registering. Start `shared-terminal --local` or
-`shared-terminal user@host` in a visible terminal, then use Codex in that same
-user account. The agent and person share that live session:
-
-1. `session_status` checks that the visible TUI is running.
-2. `terminal_read` reads up to 120 recent lines from the rendered terminal.
-3. `terminal_send` types the supplied text into the session and presses Enter.
-   It runs locally in local mode or on the remote host in SSH mode, and is
-   visible in the TUI.
-
-The agent can use `terminal_read` to inspect command output, then send follow-up
-commands with `terminal_send`. The MCP server cannot create or reconnect an SSH
-session; start the visible TUI first. The MCP server only exposes terminal
-controls. It does not provide chat or start a separate Codex conversation.
-
 ## Security and secrets
 
 MCP can read recent rendered terminal output and send text to the active shell.
@@ -123,9 +142,3 @@ or `shared-terminal send --help`. Codex MCP configuration is shared by the
 Codex CLI, desktop app, and IDE extension. See the
 [Codex MCP guide](https://developers.openai.com/codex/mcp/) for details.
 
-## Scope
-
-This is a local, single-user bridge between one TUI and one MCP process. It
-expects the agent and TUI to run as the same local user on the same machine. It
-does not implement SSH itself, manage multiple sessions, or retain a durable
-terminal transcript after the TUI exits.
