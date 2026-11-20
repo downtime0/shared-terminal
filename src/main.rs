@@ -354,6 +354,8 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
             status = "SSH process ended · press F10 to close".into();
         }
     }
+    let _ = child.kill();
+    let _ = child.wait();
     restore_terminal(&mut terminal)?;
     let _ = std::fs::remove_file(path);
     Ok(())
@@ -467,7 +469,7 @@ fn draw(
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(format!(
-                    " {status}  ·  PgUp/PgDn scroll  ·  Ctrl+C interrupt  ·  F10 quit"
+                    " {status}  ·  PgUp/PgDn scroll  ·  Ctrl+C interrupt  ·  F10 exit"
                 )),
             ])),
             chunks[1],
