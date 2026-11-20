@@ -321,7 +321,9 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         let _ = writer.lock().map(|mut w| w.write_all(&[3]));
-                    } else if key.code == KeyCode::F(10)
+                    } else if key.code == KeyCode::F(12)
+                        || (key.code == KeyCode::Char(']')
+                            && key.modifiers.contains(KeyModifiers::CONTROL))
                         || (key.code == KeyCode::Char('q')
                             && key.modifiers.contains(KeyModifiers::CONTROL))
                     {
@@ -351,9 +353,11 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
             }
         }
         if child.try_wait()?.is_some() {
-            status = "SSH process ended · press F10 to close".into();
+            status = "SSH process ended · press F12 to close".into();
         }
     }
+    let _ = child.kill();
+    let _ = child.wait();
     restore_terminal(&mut terminal)?;
     let _ = std::fs::remove_file(path);
     Ok(())
@@ -467,7 +471,7 @@ fn draw(
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(format!(
-                    " {status}  ·  PgUp/PgDn scroll  ·  Ctrl+C interrupt  ·  F10 quit"
+                    " {status}  ·  PgUp/PgDn scroll  ·  Ctrl+C interrupt  ·  F12/Ctrl+] exit"
                 )),
             ])),
             chunks[1],
