@@ -1,0 +1,131 @@
+.\" Man page for agent-terminal
+.TH AGENT-TERMINAL 1 "November 2026" "agent-terminal 0.1.0" "User Commands"
+.SH NAME
+agent-terminal \- shared SSH terminal for a person and a coding agent
+.SH SYNOPSIS
+.B agent-terminal
+.I destination
+[
+.B --
+.I ssh-options...
+]
+.br
+.B agent-terminal
+.I command
+[
+.I options
+]
+.SH DESCRIPTION
+.B agent-terminal
+starts a visible SSH terminal UI in the foreground. A person types into the
+terminal directly. A coding agent connected through the MCP server can inspect
+recent terminal output and send input into the same SSH session. Agent input
+and remote output are visible in the UI.
+.PP
+The application uses the local
+.BR ssh (1)
+client and its normal SSH configuration, identities, and host key checks. It
+does not store SSH credentials. Start the visible UI before using the local
+control commands or MCP tools. The UI and MCP server must run as the same local
+user on the same machine.
+.SH COMMANDS
+.TP
+.BI read " [--lines N]"
+Print recent output from the active shared session. The default is 120 lines.
+.TP
+.BI send " TEXT"
+Type
+.I TEXT
+into the remote SSH session and press Enter. This executes remotely and is
+visible in the UI.
+.TP
+.B status
+Check whether the shared SSH UI is running.
+.TP
+.B mcp
+Run the MCP stdio server. This is normally launched by Codex after MCP
+registration; it does not open an SSH session itself.
+.SH OPTIONS
+.TP
+.B --help
+Show CLI help. Subcommands have their own help, for example
+.BR "agent-terminal read --help" .
+.TP
+.B --version
+Show the installed version.
+.TP
+.B --
+When starting a session, pass all following arguments directly to
+.BR ssh (1).
+.SH INTERACTIVE KEYS
+.TP
+.B Ctrl+C
+Send an interrupt to the remote process.
+.TP
+.B Page Up / Page Down
+Scroll the displayed terminal.
+.TP
+.B F12
+Exit the UI and close its SSH process.
+.SH MCP TOOLS
+The MCP server exposes three tools:
+.TP
+.B session_status
+Check that the user's visible terminal session is running.
+.TP
+.B terminal_read
+Read recent output, up to 120 lines, from the active session.
+.TP
+.B terminal_send
+Type supplied text into the active remote SSH session and press Enter. This
+runs a remote command; the user can see the input and its output in the UI.
+.PP
+The agent and user share the SSH session. Keep the TUI open while using these
+tools. The MCP server cannot start or reconnect a session and does not provide
+a chat interface.
+.SH INSTALLATION
+From the source directory, build and install with Cargo:
+.PP
+.nf
+cargo install --path .
+.fi
+.PP
+Register the MCP server with Codex:
+.PP
+.nf
+codex mcp add agent-terminal -- "$HOME/.cargo/bin/agent-terminal" mcp
+.fi
+.PP
+Restart Codex after registering. Install this man page in a user man directory
+with:
+.PP
+.nf
+install -Dm644 man/agent-terminal.1 ~/.local/share/man/man1/agent-terminal.1
+.fi
+.SH EXAMPLES
+Start an SSH session:
+.PP
+.nf
+agent-terminal root@server
+.fi
+.PP
+Pass SSH options:
+.PP
+.nf
+agent-terminal root@server -- -p 2222 -i ~/.ssh/work_key
+.fi
+.PP
+Inspect or interact with an active session:
+.PP
+.nf
+agent-terminal status
+agent-terminal read --lines 40
+agent-terminal send 'uptime'
+.fi
+.SH SEE ALSO
+.BR ssh (1)
+.br
+Codex MCP guide: https://developers.openai.com/codex/mcp/
+.SH LIMITATIONS
+This is a local, single-user bridge for one TUI session. It does not manage
+multiple sessions or retain a durable transcript after the UI exits.

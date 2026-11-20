@@ -25,7 +25,13 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(name = "agent-terminal", version, about)]
+#[command(
+    name = "agent-terminal",
+    version,
+    about = "A shared SSH terminal for people and coding agents",
+    long_about = "Run one visible SSH terminal session that you and a connected agent can both use. The person types directly in the terminal; the agent reads its output and sends input through the MCP server.",
+    after_help = "Examples:\n  agent-terminal root@server\n  agent-terminal root@server -- -p 2222 -i ~/.ssh/id_ed25519\n  agent-terminal read --lines 40\n  agent-terminal send 'systemctl status ssh'\n\nStart the TUI in the foreground before using read, send, or MCP tools. F12 exits the TUI and closes its SSH process."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<AgentCommand>,
@@ -38,16 +44,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum AgentCommand {
-    /// Read the current shared session transcript
+    /// Read recent output from the active shared SSH session
     Read {
+        /// Maximum number of recent lines to return
         #[arg(long, default_value_t = 120)]
         lines: usize,
     },
-    /// Send text followed by Enter to the shared SSH session
+    /// Send text followed by Enter to the active shared SSH session
     Send { text: String },
-    /// Check whether a shared session is running
+    /// Check whether the shared SSH TUI is running
     Status,
-    /// Run this process as an MCP stdio server for Codex
+    /// Run the MCP stdio server registered with Codex
     Mcp,
 }
 
@@ -159,9 +166,9 @@ fn run_mcp() -> Result<()> {
             }),
             "ping" => serde_json::json!({}),
             "tools/list" => serde_json::json!({"tools": [
-                {"name":"terminal_read","description":"Read the current rendered SSH terminal screen.","inputSchema":{"type":"object","properties":{}}},
-                {"name":"terminal_send","description":"Type a command into the shared SSH session and press Enter. This executes remotely.","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}},
-                {"name":"session_status","description":"Check whether the shared SSH TUI is running.","inputSchema":{"type":"object","properties":{}}}
+                {"name":"terminal_read","description":"Read recent output (up to 120 lines) from the active agent-terminal SSH session shared with the user. Start the visible TUI first; this returns an error when no session is running.","inputSchema":{"type":"object","properties":{}}},
+                {"name":"terminal_send","description":"Type the supplied text into the active shared SSH terminal and press Enter. The command runs on the remote host and is visible to the user in the TUI. Use this to carry out commands the user requested; it does not start a session.","inputSchema":{"type":"object","properties":{"text":{"type":"string","description":"Text to type into the remote SSH session; Enter is appended automatically."}},"required":["text"]}},
+                {"name":"session_status","description":"Check whether the user's visible agent-terminal SSH TUI is running and available for shared interaction.","inputSchema":{"type":"object","properties":{}}}
             ]}),
             "tools/call" => {
                 let name = request
