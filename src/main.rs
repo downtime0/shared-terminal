@@ -60,6 +60,8 @@ struct Request {
     action: String,
     text: Option<String>,
     lines: Option<usize>,
+    after: Option<usize>,
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -106,26 +108,36 @@ fn agent_command(command: AgentCommand) -> Result<()> {
             action: "read".into(),
             text: None,
             lines: Some(lines),
+            after: None,
+            timeout_ms: None,
         },
         AgentCommand::Send { text } => Request {
             action: "send".into(),
             text: Some(text),
             lines: None,
+            after: None,
+            timeout_ms: None,
         },
         AgentCommand::Status => Request {
             action: "status".into(),
             text: None,
             lines: None,
+            after: None,
+            timeout_ms: None,
         },
         AgentCommand::ChatRead => Request {
             action: "chat_read".into(),
             text: None,
             lines: None,
+            after: None,
+            timeout_ms: None,
         },
         AgentCommand::ChatSay { text } => Request {
             action: "chat_send".into(),
             text: Some(text),
             lines: None,
+            after: None,
+            timeout_ms: None,
         },
         AgentCommand::Mcp => unreachable!(),
     };
@@ -184,6 +196,7 @@ fn run_mcp() -> Result<()> {
                 {"name":"terminal_read","description":"Read the current rendered SSH terminal screen.","inputSchema":{"type":"object","properties":{}}},
                 {"name":"terminal_send","description":"Type a command into the shared SSH session and press Enter. This executes remotely.","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}},
                 {"name":"chat_read","description":"Read user and agent messages in the TUI conversation.","inputSchema":{"type":"object","properties":{}}},
+                {"name":"chat_wait","description":"Wait up to 25 seconds for a new user message in the TUI conversation.","inputSchema":{"type":"object","properties":{"after":{"type":"integer","description":"Message count already seen"}}}},
                 {"name":"chat_send","description":"Post a reply in the TUI conversation so the user sees it there.","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}},
                 {"name":"session_status","description":"Check whether the shared SSH TUI is running.","inputSchema":{"type":"object","properties":{}}}
             ]}),
@@ -196,18 +209,30 @@ fn run_mcp() -> Result<()> {
                     .pointer("/params/arguments")
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
-                let (action, text) = match name {
-                    "terminal_read" => ("read", None),
+                let (action, text, after, timeout_ms) = match name {
+                    "terminal_read" => ("read", None, None, None),
                     "terminal_send" => (
                         "send",
                         args.get("text").and_then(|v| v.as_str()).map(str::to_owned),
+                        None,
+                        None,
                     ),
-                    "chat_read" => ("chat_read", None),
+                    "chat_read" => ("chat_read", None, None, None),
+                    "chat_wait" => (
+                        "chat_wait",
+                        None,
+                        args.get("after")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as usize),
+                        Some(25_000),
+                    ),
                     "chat_send" => (
                         "chat_send",
                         args.get("text").and_then(|v| v.as_str()).map(str::to_owned),
+                        None,
+                        None,
                     ),
-                    "session_status" => ("status", None),
+                    "session_status" => ("status", None, None, None),
                     _ => {
                         write_rpc(
                             &mut stdout,
@@ -221,6 +246,8 @@ fn run_mcp() -> Result<()> {
                     action: action.into(),
                     text,
                     lines: None,
+                    after,
+                    timeout_ms,
                 }) {
                     Ok(message) => {
                         serde_json::json!({"content":[{"type":"text","text":message}],"isError":false})
@@ -318,7 +345,12 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
     let agent_chat = Arc::clone(&chat);
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let _ = handle_agent(stream, &agent_writer, &agent_transcript, &agent_chat);
+            let writer = Arc::clone(&agent_writer);
+            let transcript = Arc::clone(&agent_transcript);
+            let chat = Arc::clone(&agent_chat);
+            thread::spawn(move || {
+                let _ = handle_agent(stream, &writer, &transcript, &chat);
+            });
         }
     });
 
@@ -450,6 +482,25 @@ fn handle_agent(
                     .lock()
                     .map_err(|_| anyhow::anyhow!("chat unavailable"))?;
                 Ok(serde_json::to_string(&*messages)?)
+            }
+            "chat_wait" => {
+                let after = request.after.unwrap_or(0);
+                let timeout =
+                    Duration::from_millis(request.timeout_ms.unwrap_or(25_000).min(25_000));
+                let start = std::time::Instant::now();
+                loop {
+                    let messages = chat
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("chat unavailable"))?;
+                    if messages.len() > after {
+                        return Ok(serde_json::to_string(&messages[after..])?);
+                    }
+                    if start.elapsed() >= timeout {
+                        return Ok("No new user message before timeout.".into());
+                    }
+                    drop(messages);
+                    thread::sleep(Duration::from_millis(100));
+                }
             }
             "chat_send" => {
                 chat.lock()
