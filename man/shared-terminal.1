@@ -72,6 +72,9 @@ SSH. Agent commands run locally as the user running the UI.
 .B Ctrl+C
 Send an interrupt to the active process.
 .TP
+.B Ctrl+Q
+Exit the UI and close its shell or SSH process.
+.TP
 .B Page Up / Page Down
 Scroll the displayed terminal.
 .TP
@@ -96,20 +99,27 @@ The agent and user share the session. Keep the TUI open while using these
 tools. The MCP server cannot start or reconnect a session and does not provide
 a chat interface.
 .SH INSTALLATION
-From the source directory, build and install with Cargo:
+From the repository root, run the installer to build and force-update the
+executable, install this man page, and register or refresh the Codex MCP entry:
 .PP
 .nf
-cargo install --path .
+./install.sh
 .fi
 .PP
-Register the MCP server with Codex:
+The installer skips MCP registration if the Codex CLI is not installed. To
+register the server manually, use:
 .PP
 .nf
 codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
 .fi
 .PP
-Restart Codex after registering. Install this man page in a user man directory
-with:
+After changing the code, run
+.B ./install.sh
+again. It force-updates the binary and removes and recreates the MCP entry,
+because the Codex CLI has no force option for
+.BR "mcp add" .
+Restart Codex and start a new shared-terminal session after installation. To
+install this man page without running the installer, use:
 .PP
 .nf
 install -Dm644 man/shared-terminal.1 ~/.local/share/man/man1/shared-terminal.1
