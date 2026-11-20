@@ -26,11 +26,11 @@ use std::{
 
 #[derive(Parser)]
 #[command(
-    name = "agent-terminal",
+    name = "shared-terminal",
     version,
     about = "A shared SSH terminal for people and coding agents",
     long_about = "Run one visible SSH terminal session that you and a connected agent can both use. The person types directly in the terminal; the agent reads its output and sends input through the MCP server.",
-    after_help = "Examples:\n  agent-terminal root@server\n  agent-terminal root@server -- -p 2222 -i ~/.ssh/id_ed25519\n  agent-terminal read --lines 40\n  agent-terminal send 'systemctl status ssh'\n\nStart the TUI in the foreground before using read, send, or MCP tools. F12 exits the TUI and closes its SSH process."
+    after_help = "Examples:\n  shared-terminal root@server\n  shared-terminal root@server -- -p 2222 -i ~/.ssh/id_ed25519\n  shared-terminal read --lines 40\n  shared-terminal send 'systemctl status ssh'\n\nStart the TUI in the foreground before using read, send, or MCP tools. F12 exits the TUI and closes its SSH process."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -83,19 +83,19 @@ fn main() -> Result<()> {
     }
     let destination = cli
         .destination
-        .context("missing SSH destination (try: agent-terminal user@host)")?;
+        .context("missing SSH destination (try: shared-terminal user@host)")?;
     run_tui(destination, cli.ssh_args)
 }
 
 fn socket_path() -> PathBuf {
     let uid = env::var("UID").unwrap_or_else(|_| "user".into());
-    env::temp_dir().join(format!("agent-terminal-{uid}.sock"))
+    env::temp_dir().join(format!("shared-terminal-{uid}.sock"))
 }
 
 fn agent_command(command: AgentCommand) -> Result<()> {
     use std::os::unix::net::UnixStream;
     let mut stream = UnixStream::connect(socket_path())
-        .context("could not connect to agent-terminal; start a session first")?;
+        .context("could not connect to shared-terminal; start a session first")?;
     let request = match command {
         AgentCommand::Read { lines } => Request {
             action: "read".into(),
@@ -130,7 +130,7 @@ fn agent_command(command: AgentCommand) -> Result<()> {
 fn socket_request(request: Request) -> Result<String> {
     use std::os::unix::net::UnixStream;
     let mut stream =
-        UnixStream::connect(socket_path()).context("agent-terminal TUI is not running")?;
+        UnixStream::connect(socket_path()).context("shared-terminal TUI is not running")?;
     serde_json::to_writer(&mut stream, &request)?;
     stream.write_all(b"\n")?;
     stream.flush()?;
@@ -162,13 +162,13 @@ fn run_mcp() -> Result<()> {
             "initialize" => serde_json::json!({
                 "protocolVersion": request.pointer("/params/protocolVersion").and_then(|v| v.as_str()).unwrap_or("2024-11-05"),
                 "capabilities": {"tools": {"listChanged": false}},
-                "serverInfo": {"name": "agent-terminal", "version": env!("CARGO_PKG_VERSION")}
+                "serverInfo": {"name": "shared-terminal", "version": env!("CARGO_PKG_VERSION")}
             }),
             "ping" => serde_json::json!({}),
             "tools/list" => serde_json::json!({"tools": [
-                {"name":"terminal_read","description":"Read recent output (up to 120 lines) from the active agent-terminal SSH session shared with the user. Start the visible TUI first; this returns an error when no session is running.","inputSchema":{"type":"object","properties":{}}},
+                {"name":"terminal_read","description":"Read recent output (up to 120 lines) from the active shared-terminal SSH session shared with the user. Start the visible TUI first; this returns an error when no session is running.","inputSchema":{"type":"object","properties":{}}},
                 {"name":"terminal_send","description":"Type the supplied text into the active shared SSH terminal and press Enter. The command runs on the remote host and is visible to the user in the TUI. Use this to carry out commands the user requested; it does not start a session.","inputSchema":{"type":"object","properties":{"text":{"type":"string","description":"Text to type into the remote SSH session; Enter is appended automatically."}},"required":["text"]}},
-                {"name":"session_status","description":"Check whether the user's visible agent-terminal SSH TUI is running and available for shared interaction.","inputSchema":{"type":"object","properties":{}}}
+                {"name":"session_status","description":"Check whether the user's visible shared-terminal SSH TUI is running and available for shared interaction.","inputSchema":{"type":"object","properties":{}}}
             ]}),
             "tools/call" => {
                 let name = request
@@ -456,7 +456,7 @@ fn draw(
         let lines: Vec<Line> = screen.lines().map(Line::from).collect();
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Agent Terminal · shared SSH ");
+            .title(" Shared Terminal · SSH ");
         let mut view = Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false });

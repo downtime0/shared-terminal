@@ -1,22 +1,22 @@
-.\" Man page for agent-terminal
-.TH AGENT-TERMINAL 1 "November 2026" "agent-terminal 0.1.0" "User Commands"
+.\" Man page for shared-terminal
+.TH SHARED-TERMINAL 1 "November 2026" "shared-terminal 0.1.0" "User Commands"
 .SH NAME
-agent-terminal \- shared SSH terminal for a person and a coding agent
+shared-terminal \- shared SSH terminal for a person and a coding agent
 .SH SYNOPSIS
-.B agent-terminal
+.B shared-terminal
 .I destination
 [
 .B --
 .I ssh-options...
 ]
 .br
-.B agent-terminal
+.B shared-terminal
 .I command
 [
 .I options
 ]
 .SH DESCRIPTION
-.B agent-terminal
+.B shared-terminal
 starts a visible SSH terminal UI in the foreground. A person types into the
 terminal directly. A coding agent connected through the MCP server can inspect
 recent terminal output and send input into the same SSH session. Agent input
@@ -49,7 +49,7 @@ registration; it does not open an SSH session itself.
 .TP
 .B --help
 Show CLI help. Subcommands have their own help, for example
-.BR "agent-terminal read --help" .
+.BR "shared-terminal read --help" .
 .TP
 .B --version
 Show the installed version.
@@ -93,35 +93,47 @@ cargo install --path .
 Register the MCP server with Codex:
 .PP
 .nf
-codex mcp add agent-terminal -- "$HOME/.cargo/bin/agent-terminal" mcp
+codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
 .fi
 .PP
 Restart Codex after registering. Install this man page in a user man directory
 with:
 .PP
 .nf
-install -Dm644 man/agent-terminal.1 ~/.local/share/man/man1/agent-terminal.1
+install -Dm644 man/shared-terminal.1 ~/.local/share/man/man1/shared-terminal.1
 .fi
 .SH EXAMPLES
 Start an SSH session:
 .PP
 .nf
-agent-terminal root@server
+shared-terminal root@server
 .fi
 .PP
 Pass SSH options:
 .PP
 .nf
-agent-terminal root@server -- -p 2222 -i ~/.ssh/work_key
+shared-terminal root@server -- -p 2222 -i ~/.ssh/work_key
 .fi
 .PP
 Inspect or interact with an active session:
 .PP
 .nf
-agent-terminal status
-agent-terminal read --lines 40
-agent-terminal send 'uptime'
+shared-terminal status
+shared-terminal read --lines 40
+shared-terminal send 'uptime'
 .fi
+.SH UPGRADING FROM agent-terminal
+Install the renamed executable, replace the previous Codex MCP registration,
+then restart Codex and the visible terminal session:
+.PP
+.nf
+cargo install --path .
+codex mcp remove agent-terminal
+codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
+.fi
+.PP
+Exit an old agent-terminal UI with F12 before starting shared-terminal. The
+renamed application uses a new local session socket.
 .SH SEE ALSO
 .BR ssh (1)
 .br

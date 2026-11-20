@@ -1,12 +1,12 @@
 [package]
-name = "agent-terminal"
+name = "shared-terminal"
 version = "0.1.0"
 edition = "2024"
 description = "A small shared SSH terminal for people and coding agents"
 license = "MIT"
 
 [[bin]]
-name = "agent-terminal"
+name = "shared-terminal"
 path = "src/main.rs"
 
 [dependencies]
