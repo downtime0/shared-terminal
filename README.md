@@ -146,7 +146,7 @@ Give your agent a prompt regarding the shared terminal session:
 i.e.
 
 ```
-Use the shared terminal to check disk space on the connected machine. Don’t make changes unless asked.
+Use the shared-terminal mcp to check disk space on the connected machine. Don’t make changes unless asked.
 ```
 
 ---
