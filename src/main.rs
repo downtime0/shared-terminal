@@ -301,9 +301,11 @@ fn write_rpc_error(
 
 fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
     let pty_system = native_pty_system();
+    let (width, height) = crossterm::terminal::size()?;
+    let (rows, cols) = ssh_dimensions(width, height);
     let pair = pty_system.openpty(PtySize {
-        rows: 24,
-        cols: 80,
+        rows,
+        cols,
         pixel_width: 0,
         pixel_height: 0,
     })?;
@@ -358,7 +360,7 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
     });
 
     let mut terminal = setup_terminal()?;
-    let mut parser = vt100::Parser::new(24, 80, 2_000);
+    let mut parser = vt100::Parser::new(rows, cols, 2_000);
     let mut status = format!("SSH: {destination}");
     let mut scroll = 0usize;
     let mut chat_scroll = 0usize;
@@ -458,6 +460,16 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
                             _ => {}
                         }
                     }
+                }
+                Event::Resize(width, height) => {
+                    let (rows, cols) = ssh_dimensions(width, height);
+                    pair.master.resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })?;
+                    parser.set_size(rows, cols);
                 }
                 _ => {}
             }
@@ -591,14 +603,14 @@ fn draw(
     chat_scroll: usize,
 ) -> Result<()> {
     terminal.draw(|frame| {
-        let chunks = Layout::default()
+        let root = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(68),
-                Constraint::Min(5),
-                Constraint::Length(1),
-            ])
+            .constraints([Constraint::Min(5), Constraint::Length(1)])
             .split(frame.area());
+        let panels = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+            .split(root[0]);
         let lines: Vec<Line> = screen.lines().map(Line::from).collect();
         let block = Block::default()
             .borders(Borders::ALL)
@@ -606,12 +618,12 @@ fn draw(
         let mut view = Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false });
-        let available = chunks[0].height.saturating_sub(2) as usize;
+        let available = panels[0].height.saturating_sub(2) as usize;
         let total = screen.lines().count();
         let bottom = total.saturating_sub(scroll);
         let top = bottom.saturating_sub(available);
         view = view.scroll((top.min(u16::MAX as usize) as u16, 0));
-        frame.render_widget(view, chunks[0]);
+        frame.render_widget(view, panels[0]);
         let chat_lines: Vec<Line> = messages
             .iter()
             .map(|m| {
@@ -635,8 +647,8 @@ fn draw(
             " Conversation · F2 to message agent "
         };
         let chat_block = Block::default().borders(Borders::ALL).title(chat_title);
-        let chat_inner = chat_block.inner(chunks[1]);
-        frame.render_widget(chat_block, chunks[1]);
+        let chat_inner = chat_block.inner(panels[1]);
+        frame.render_widget(chat_block, panels[1]);
         let history_height = chat_inner.height.saturating_sub(1);
         let history_area = ratatui::layout::Rect::new(
             chat_inner.x,
@@ -694,21 +706,28 @@ fn draw(
                     " {status}  ·  F2 chat  ·  PgUp/PgDn scroll  ·  F10 quit"
                 )),
             ])),
-            chunks[1],
+            root[1],
         );
     })?;
     Ok(())
 }
 
 fn chat_area(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
-    Layout::default()
+    let root = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(68),
-            Constraint::Min(5),
-            Constraint::Length(1),
-        ])
-        .split(area)[1]
+        .constraints([Constraint::Min(5), Constraint::Length(1)])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .split(root[0])[1]
+}
+
+fn ssh_dimensions(width: u16, height: u16) -> (u16, u16) {
+    let terminal_width = width.saturating_mul(65) / 100;
+    let cols = terminal_width.saturating_sub(2).max(10);
+    let rows = height.saturating_sub(3).max(3);
+    (rows, cols)
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {

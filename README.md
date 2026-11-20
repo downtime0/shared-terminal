@@ -2,7 +2,8 @@
 
 A shared SSH workspace with one live terminal and a separate conversation pane.
 You can type remote shell input directly, while an agent can read the same
-terminal, send commands, and reply in the conversation pane through MCP.
+terminal, send commands, and reply in the conversation pane through MCP. The SSH
+terminal stays on the left and the taller conversation pane stays on the right.
 
 ## Run
 
