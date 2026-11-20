@@ -95,6 +95,19 @@ commands with `terminal_send`. The MCP server cannot create or reconnect an SSH
 session; start the visible TUI first. The MCP server only exposes terminal
 controls. It does not provide chat or start a separate Codex conversation.
 
+## Security and secrets
+
+MCP can read recent rendered terminal output and send text to the active shell.
+Commands run with the permissions of that shell: your local user in local mode,
+or the connected account in SSH mode. An agent can therefore read files and
+environment variables that account can access by running shell commands.
+
+Do not paste tokens, passwords, or other secrets into commands or other
+terminal input that may be echoed. If a secret appears in rendered output, MCP
+can read it. Standard no-echo password prompts normally do not display the
+typed password, but avoid relying on that as a way to share secrets. The app
+does not provide a separate token or password store.
+
 The same tools are available through the local CLI while a TUI session is
 running:
 
