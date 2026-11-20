@@ -358,6 +358,7 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
     let mut parser = vt100::Parser::new(24, 80, 2_000);
     let mut status = format!("SSH: {destination}");
     let mut scroll = 0usize;
+    let mut chat_scroll = 0usize;
     let mut chat_mode = false;
     let mut chat_input = String::new();
     loop {
@@ -378,6 +379,7 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
             &messages,
             &chat_input,
             chat_mode,
+            chat_scroll,
         )?;
         if event::poll(Duration::from_millis(40))? {
             if let Event::Key(key) = event::read()? {
@@ -401,8 +403,11 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
                                     });
                                 }
                                 chat_input.clear();
+                                chat_scroll = 0;
                             }
                         }
+                        KeyCode::PageUp => chat_scroll = chat_scroll.saturating_add(5),
+                        KeyCode::PageDown => chat_scroll = chat_scroll.saturating_sub(5),
                         KeyCode::Backspace => {
                             chat_input.pop();
                         }
@@ -558,6 +563,7 @@ fn draw(
     messages: &[ChatMessage],
     chat_input: &str,
     chat_mode: bool,
+    chat_scroll: usize,
 ) -> Result<()> {
     terminal.draw(|frame| {
         let chunks = Layout::default()
@@ -583,11 +589,6 @@ fn draw(
         frame.render_widget(view, chunks[0]);
         let chat_lines: Vec<Line> = messages
             .iter()
-            .rev()
-            .take(chunks[1].height.saturating_sub(3) as usize)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
             .map(|m| {
                 let (label, color) = if m.role == "agent" {
                     ("AGENT", Color::Cyan)
@@ -609,25 +610,51 @@ fn draw(
             " Conversation · F2 to message agent "
         };
         let chat_block = Block::default().borders(Borders::ALL).title(chat_title);
-        let chat_content = Paragraph::new(chat_lines)
-            .block(chat_block)
-            .wrap(Wrap { trim: false });
-        frame.render_widget(chat_content, chunks[1]);
-        if chat_mode && chunks[1].height > 2 {
-            let input_y = chunks[1].y + chunks[1].height - 2;
+        let chat_inner = chat_block.inner(chunks[1]);
+        frame.render_widget(chat_block, chunks[1]);
+        let history_height = chat_inner.height.saturating_sub(1);
+        let history_area = ratatui::layout::Rect::new(
+            chat_inner.x,
+            chat_inner.y,
+            chat_inner.width,
+            history_height,
+        );
+        let content_height = chat_lines
+            .iter()
+            .map(|line| {
+                let chars = line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.chars().count())
+                    .sum::<usize>();
+                chars.div_ceil(history_area.width.max(1) as usize).max(1)
+            })
+            .sum::<usize>();
+        let chat_content = Paragraph::new(chat_lines).wrap(Wrap { trim: false });
+        let max_scroll = content_height.saturating_sub(history_area.height as usize);
+        let offset = max_scroll
+            .saturating_sub(chat_scroll)
+            .min(u16::MAX as usize) as u16;
+        frame.render_widget(chat_content.scroll((offset, 0)), history_area);
+        let input_y = chat_inner.y + history_height;
+        if chat_mode && chat_inner.height > 0 {
             frame.render_widget(
                 Paragraph::new(format!("> {chat_input}")),
-                ratatui::layout::Rect::new(
-                    chunks[1].x + 1,
-                    input_y,
-                    chunks[1].width.saturating_sub(2),
-                    1,
-                ),
+                ratatui::layout::Rect::new(chat_inner.x, input_y, chat_inner.width, 1),
             );
             frame.set_cursor_position((
-                chunks[1].x + 3 + chat_input.chars().count() as u16,
+                (chat_inner.x + 2 + chat_input.chars().count() as u16)
+                    .min(chat_inner.x + chat_inner.width.saturating_sub(1)),
                 input_y,
             ));
+        } else if chat_inner.height > 0 {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "F2 to type · PgUp/PgDn to scroll",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                ratatui::layout::Rect::new(chat_inner.x, input_y, chat_inner.width, 1),
+            );
         }
         frame.render_widget(
             Paragraph::new(Line::from(vec![
