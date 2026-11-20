@@ -1,21 +1,21 @@
 # shared-terminal
 
-`shared-terminal` opens one visible SSH terminal that a person and a coding
-agent can share. The person types into the TUI as usual. A connected agent can
-check whether the session is running, read recent terminal output, and send
-input through MCP. Sent input and the remote response appear in the same
-terminal. Keep the conversation with the agent in Codex; this app is the shared
-terminal, not a chat client.
+`shared-terminal` opens one visible terminal session that a person and a coding
+agent can share. Run a local shell or connect to a remote host over SSH. The
+person types into the TUI as usual. A connected agent can check whether the
+session is running, read recent terminal output, and send input through MCP.
+Keep the conversation with the agent in Codex; this app is the shared terminal,
+not a chat client.
 
 ## Requirements
 
 - Linux or another Unix-like system with a working terminal
 - Rust and Cargo
-- OpenSSH client (`ssh`)
+- OpenSSH client (`ssh`) for remote sessions
 - Codex CLI, if you want to connect the MCP server to Codex
 
-SSH uses your normal SSH config, keys, agent, and host key checks. The app does
-not store SSH credentials.
+SSH sessions use your normal SSH config, keys, agent, and host key checks. The
+app does not store SSH credentials.
 
 ## Install
 
@@ -41,10 +41,21 @@ install -Dm644 man/shared-terminal.1 ~/.local/share/man/man1/shared-terminal.1
 man shared-terminal
 ```
 
-## Start an SSH session
+## Start a session
 
-Run the TUI in the foreground in a terminal window. This keeps the shared
-session visible to you and available to the MCP tools:
+Start a shared local shell:
+
+```sh
+shared-terminal --local
+```
+
+The app runs your configured `$SHELL` interactively inside the TUI. You and the
+agent share that local shell, so commands sent by the agent run on your machine
+as your user.
+
+To connect to a remote host, pass an SSH destination. Run the TUI in the
+foreground in a terminal window to keep the session visible and available to
+the MCP tools:
 
 ```sh
 shared-terminal root@server
@@ -56,9 +67,10 @@ SSH options go after `--` and are passed directly to `ssh`:
 shared-terminal root@server -- -p 2222 -i ~/.ssh/work_key
 ```
 
-Type into the terminal normally. `Ctrl+C` sends an interrupt to the remote
+Type into the terminal normally. `Ctrl+C` sends an interrupt to the active
 process. `Page Up` and `Page Down` scroll the displayed terminal. `F12` exits
-the TUI and closes its SSH process. Run one session at a time for your user.
+the TUI and closes its shell or SSH process. Run one session at a time for your
+user.
 
 ## Connect Codex with MCP
 
@@ -68,14 +80,15 @@ Register the MCP server with Codex:
 codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
 ```
 
-Restart Codex after registering. Start `shared-terminal user@host` in a visible
-terminal, then use Codex in that same user account. The agent and person share
-that live SSH session:
+Restart Codex after registering. Start `shared-terminal --local` or
+`shared-terminal user@host` in a visible terminal, then use Codex in that same
+user account. The agent and person share that live session:
 
 1. `session_status` checks that the visible TUI is running.
 2. `terminal_read` reads up to 120 recent lines from the rendered terminal.
-3. `terminal_send` types the supplied text into the SSH session and presses
-   Enter. This runs on the remote host and is visible in the TUI.
+3. `terminal_send` types the supplied text into the session and presses Enter.
+   It runs locally in local mode or on the remote host in SSH mode, and is
+   visible in the TUI.
 
 The agent can use `terminal_read` to inspect command output, then send follow-up
 commands with `terminal_send`. The MCP server cannot create or reconnect an SSH

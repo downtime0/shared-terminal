@@ -1,8 +1,11 @@
 .\" Man page for shared-terminal
 .TH SHARED-TERMINAL 1 "November 2026" "shared-terminal 0.1.0" "User Commands"
 .SH NAME
-shared-terminal \- shared SSH terminal for a person and a coding agent
+shared-terminal \- shared local or SSH terminal for a person and a coding agent
 .SH SYNOPSIS
+.B shared-terminal
+.B --local
+.br
 .B shared-terminal
 .I destination
 [
@@ -17,12 +20,15 @@ shared-terminal \- shared SSH terminal for a person and a coding agent
 ]
 .SH DESCRIPTION
 .B shared-terminal
-starts a visible SSH terminal UI in the foreground. A person types into the
-terminal directly. A coding agent connected through the MCP server can inspect
-recent terminal output and send input into the same SSH session. Agent input
-and remote output are visible in the UI.
+starts a visible terminal UI in the foreground. Use
+.B --local
+to run your configured interactive shell, or provide an SSH destination to
+connect to a remote host. A person types into the terminal directly. A coding
+agent connected through the MCP server can inspect recent terminal output and
+send input into the same session. Agent input and command output are visible
+in the UI.
 .PP
-The application uses the local
+For remote sessions, the application uses the local
 .BR ssh (1)
 client and its normal SSH configuration, identities, and host key checks. It
 does not store SSH credentials. Start the visible UI before using the local
@@ -36,11 +42,11 @@ Print recent output from the active shared session. The default is 120 lines.
 .BI send " TEXT"
 Type
 .I TEXT
-into the remote SSH session and press Enter. This executes remotely and is
-visible in the UI.
+into the active shell and press Enter. This runs locally or remotely, depending
+on the session type, and is visible in the UI.
 .TP
 .B status
-Check whether the shared SSH UI is running.
+Check whether the shared terminal UI is running.
 .TP
 .B mcp
 Run the MCP stdio server. This is normally launched by Codex after MCP
@@ -55,20 +61,25 @@ Show CLI help. Subcommands have their own help, for example
 Show the installed version.
 .TP
 .B --
-When starting a session, pass all following arguments directly to
+With an SSH destination, pass all following arguments directly to
 .BR ssh (1).
+.TP
+.B --local
+Start the user's local shell in the shared terminal instead of connecting over
+SSH. Agent commands run locally as the user running the UI.
 .SH INTERACTIVE KEYS
 .TP
 .B Ctrl+C
-Send an interrupt to the remote process.
+Send an interrupt to the active process.
 .TP
 .B Page Up / Page Down
 Scroll the displayed terminal.
 .TP
 .B F12
-Exit the UI and close its SSH process.
+Exit the UI and close its shell or SSH process.
 .SH MCP TOOLS
-The MCP server exposes three tools:
+The MCP server exposes three tools. They work with either a local shell or an
+SSH session:
 .TP
 .B session_status
 Check that the user's visible terminal session is running.
@@ -77,10 +88,11 @@ Check that the user's visible terminal session is running.
 Read recent output, up to 120 lines, from the active session.
 .TP
 .B terminal_send
-Type supplied text into the active remote SSH session and press Enter. This
-runs a remote command; the user can see the input and its output in the UI.
+Type supplied text into the active shell and press Enter. Commands run locally
+in local mode or remotely in SSH mode; the user can see the input and output
+in the UI.
 .PP
-The agent and user share the SSH session. Keep the TUI open while using these
+The agent and user share the session. Keep the TUI open while using these
 tools. The MCP server cannot start or reconnect a session and does not provide
 a chat interface.
 .SH INSTALLATION
@@ -103,6 +115,12 @@ with:
 install -Dm644 man/shared-terminal.1 ~/.local/share/man/man1/shared-terminal.1
 .fi
 .SH EXAMPLES
+Start a local shell:
+.PP
+.nf
+shared-terminal --local
+.fi
+.PP
 Start an SSH session:
 .PP
 .nf
@@ -122,18 +140,6 @@ shared-terminal status
 shared-terminal read --lines 40
 shared-terminal send 'uptime'
 .fi
-.SH UPGRADING FROM agent-terminal
-Install the renamed executable, replace the previous Codex MCP registration,
-then restart Codex and the visible terminal session:
-.PP
-.nf
-cargo install --path .
-codex mcp remove agent-terminal
-codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
-.fi
-.PP
-Exit an old agent-terminal UI with F12 before starting shared-terminal. The
-renamed application uses a new local session socket.
 .SH SEE ALSO
 .BR ssh (1)
 .br

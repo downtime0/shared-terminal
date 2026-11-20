@@ -28,15 +28,18 @@ use std::{
 #[command(
     name = "shared-terminal",
     version,
-    about = "A shared SSH terminal for people and coding agents",
-    long_about = "Run one visible SSH terminal session that you and a connected agent can both use. The person types directly in the terminal; the agent reads its output and sends input through the MCP server.",
-    after_help = "Examples:\n  shared-terminal root@server\n  shared-terminal root@server -- -p 2222 -i ~/.ssh/id_ed25519\n  shared-terminal read --lines 40\n  shared-terminal send 'systemctl status ssh'\n\nStart the TUI in the foreground before using read, send, or MCP tools. F12 exits the TUI and closes its SSH process."
+    about = "A shared local or SSH terminal for people and coding agents",
+    long_about = "Run one visible terminal session that you and a connected agent can both use. Start a local shell with --local, or connect over SSH with a destination. The person types directly in the terminal; the agent reads its output and sends input through the MCP server.",
+    after_help = "Examples:\n  shared-terminal --local\n  shared-terminal root@server\n  shared-terminal root@server -- -p 2222 -i ~/.ssh/id_ed25519\n  shared-terminal read --lines 40\n  shared-terminal send 'systemctl status ssh'\n\nStart the TUI in the foreground before using read, send, or MCP tools. F12 exits the TUI and closes its child process."
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<AgentCommand>,
     /// SSH destination, such as user@host
     destination: Option<String>,
+    /// Start the user's local interactive shell instead of SSH
+    #[arg(long, conflicts_with = "destination")]
+    local: bool,
     /// Arguments passed directly to ssh (repeatable)
     #[arg(last = true)]
     ssh_args: Vec<String>,
@@ -44,15 +47,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum AgentCommand {
-    /// Read recent output from the active shared SSH session
+    /// Read recent output from the active shared terminal
     Read {
         /// Maximum number of recent lines to return
         #[arg(long, default_value_t = 120)]
         lines: usize,
     },
-    /// Send text followed by Enter to the active shared SSH session
+    /// Send text followed by Enter to the active shared terminal
     Send { text: String },
-    /// Check whether the shared SSH TUI is running
+    /// Check whether the shared terminal TUI is running
     Status,
     /// Run the MCP stdio server registered with Codex
     Mcp,
@@ -81,10 +84,16 @@ fn main() -> Result<()> {
         }
         return agent_command(command);
     }
-    let destination = cli
-        .destination
-        .context("missing SSH destination (try: shared-terminal user@host)")?;
-    run_tui(destination, cli.ssh_args)
+    if cli.local {
+        if !cli.ssh_args.is_empty() {
+            bail!("SSH arguments cannot be used with --local");
+        }
+        return run_tui(None, cli.ssh_args);
+    }
+    let destination = cli.destination.context(
+        "missing destination (try: shared-terminal --local or shared-terminal user@host)",
+    )?;
+    run_tui(Some(destination), cli.ssh_args)
 }
 
 fn socket_path() -> PathBuf {
@@ -166,9 +175,9 @@ fn run_mcp() -> Result<()> {
             }),
             "ping" => serde_json::json!({}),
             "tools/list" => serde_json::json!({"tools": [
-                {"name":"terminal_read","description":"Read recent output (up to 120 lines) from the active shared-terminal SSH session shared with the user. Start the visible TUI first; this returns an error when no session is running.","inputSchema":{"type":"object","properties":{}}},
-                {"name":"terminal_send","description":"Type the supplied text into the active shared SSH terminal and press Enter. The command runs on the remote host and is visible to the user in the TUI. Use this to carry out commands the user requested; it does not start a session.","inputSchema":{"type":"object","properties":{"text":{"type":"string","description":"Text to type into the remote SSH session; Enter is appended automatically."}},"required":["text"]}},
-                {"name":"session_status","description":"Check whether the user's visible shared-terminal SSH TUI is running and available for shared interaction.","inputSchema":{"type":"object","properties":{}}}
+                {"name":"terminal_read","description":"Read recent output (up to 120 lines) from the active shared-terminal session. The session may be a local shell or an SSH connection. Start the visible TUI first; this returns an error when no session is running.","inputSchema":{"type":"object","properties":{}}},
+                {"name":"terminal_send","description":"Type the supplied text into the active shared terminal and press Enter. This runs in the selected shell (locally for --local, or remotely for SSH) and is visible to the user in the TUI. Use this to carry out commands the user requested; it does not start a session.","inputSchema":{"type":"object","properties":{"text":{"type":"string","description":"Text to type into the active local shell or SSH session; Enter is appended automatically."}},"required":["text"]}},
+                {"name":"session_status","description":"Check whether the user's visible shared-terminal TUI is running and available for shared interaction.","inputSchema":{"type":"object","properties":{}}}
             ]}),
             "tools/call" => {
                 let name = request
@@ -247,7 +256,7 @@ fn write_rpc_error(
     Ok(())
 }
 
-fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
+fn run_tui(destination: Option<String>, ssh_args: Vec<String>) -> Result<()> {
     let pty_system = native_pty_system();
     let (width, height) = crossterm::terminal::size()?;
     let (rows, cols) = ssh_dimensions(width, height);
@@ -257,15 +266,26 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
         pixel_width: 0,
         pixel_height: 0,
     })?;
-    let mut command = CommandBuilder::new("ssh");
-    for arg in ssh_args {
-        command.arg(arg);
-    }
-    command.arg(destination.clone());
+    let (command, mut status) = if let Some(destination) = destination {
+        let mut command = CommandBuilder::new("ssh");
+        for arg in ssh_args {
+            command.arg(arg);
+        }
+        command.arg(destination.clone());
+        (command, format!("SSH: {destination}"))
+    } else {
+        let shell = env::var("SHELL")
+            .ok()
+            .filter(|shell| !shell.is_empty())
+            .unwrap_or_else(|| "/bin/sh".into());
+        let mut command = CommandBuilder::new(&shell);
+        command.arg("-i");
+        (command, format!("Local shell: {shell}"))
+    };
     let mut child = pair
         .slave
         .spawn_command(command)
-        .context("failed to start ssh")?;
+        .context("failed to start terminal process")?;
     drop(pair.slave);
 
     let writer: SharedWriter = Arc::new(Mutex::new(pair.master.take_writer()?));
@@ -306,7 +326,6 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
 
     let mut terminal = setup_terminal()?;
     let mut parser = vt100::Parser::new(rows, cols, 2_000);
-    let mut status = format!("SSH: {destination}");
     let mut scroll = 0usize;
     loop {
         while let Ok(bytes) = output_rx.try_recv() {
@@ -358,7 +377,7 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
             }
         }
         if child.try_wait()?.is_some() {
-            status = "SSH process ended · press F12 to close".into();
+            status = "Terminal process ended · press F12 to close".into();
         }
     }
     let _ = child.kill();
@@ -401,7 +420,7 @@ fn handle_agent(
                     .lock()
                     .map_err(|_| anyhow::anyhow!("terminal unavailable"))?
                     .write_all(text.as_bytes())?;
-                Ok("sent to shared SSH session".into())
+                Ok("sent to shared terminal".into())
             }
             _ => bail!("unknown action"),
         }

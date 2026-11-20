@@ -2,7 +2,7 @@
 name = "shared-terminal"
 version = "0.1.0"
 edition = "2024"
-description = "A small shared SSH terminal for people and coding agents"
+description = "A small shared local or SSH terminal for people and coding agents"
 license = "MIT"
 
 [[bin]]
