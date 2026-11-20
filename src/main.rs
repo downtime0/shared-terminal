@@ -322,8 +322,6 @@ fn run_tui(destination: String, ssh_args: Vec<String>) -> Result<()> {
                     {
                         let _ = writer.lock().map(|mut w| w.write_all(&[3]));
                     } else if key.code == KeyCode::F(12)
-                        || (key.code == KeyCode::Char(']')
-                            && key.modifiers.contains(KeyModifiers::CONTROL))
                         || (key.code == KeyCode::Char('q')
                             && key.modifiers.contains(KeyModifiers::CONTROL))
                     {
@@ -471,7 +469,7 @@ fn draw(
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(format!(
-                    " {status}  ·  PgUp/PgDn scroll  ·  Ctrl+C interrupt  ·  F12/Ctrl+] exit"
+                    " {status}  ·  PgUp/PgDn scroll  ·  Ctrl+C interrupt  ·  F12 exit"
                 )),
             ])),
             chunks[1],

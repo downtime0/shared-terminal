@@ -11,8 +11,8 @@ cargo run -- user@host
 ```
 
 The app uses your normal `ssh` executable and SSH configuration. Use `Ctrl+C`
-to interrupt the remote process, `Page Up`/`Page Down` to scroll, and `F12` or
-`Ctrl+]` to exit the TUI and close SSH.
+to interrupt the remote process, `Page Up`/`Page Down` to scroll, and `F12` to
+exit the TUI and close SSH.
 
 Pass SSH options after `--`:
 
