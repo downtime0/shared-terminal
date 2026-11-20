@@ -31,6 +31,10 @@ The user is expected to prompt the agent via the agent session but also interact
 
 I hope you get the point. Use this for visiblity into agents working in your ssh or local environments.
 
+![alt text](assets/screen-shot-1.png)
+
+.
+
 ## Requirements
 
 - Linux or another Unix-like system with a working terminal
@@ -43,18 +47,11 @@ app does not store SSH credentials.
 
 ## Install
 
-From this repository, build the executable:
+From the repository root, run the installer to build and force-update the
+executable, install the man page, and register or refresh the Codex MCP entry:
 
 ```sh
-cargo build --release
-```
-
-The binary is written to `target/release/shared-terminal`. To install or update
-the command in `~/.cargo/bin`, force replacement of any previously installed
-version:
-
-```sh
-cargo install --path . --force
+./install.sh
 ```
 
 Cargo installs it as `~/.cargo/bin/shared-terminal`. Add Cargo's bin directory
@@ -66,16 +63,17 @@ source ~/.bashrc
 ```
 
 If you use a shell other than Bash, add `~/.cargo/bin` to that shell's startup
-file instead. To install the included man page for your user:
+file instead. The installer puts the man page in your user man directory; view
+it with:
 
 ```sh
-install -Dm644 man/shared-terminal.1 ~/.local/share/man/man1/shared-terminal.1
 man shared-terminal
 ```
 
 ## Register MCP with Codex
 
-Register the MCP server with Codex:
+`./install.sh` registers or refreshes this MCP entry automatically. To register
+it manually:
 
 ```sh
 codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
@@ -157,21 +155,18 @@ Use the shared terminal to check disk space on the connected machine. Don’t ma
 
 ## After making changes to the code, Rebuild and refresh the Codex MCP registration
 
-After changing the code, run these commands from the repository root to build
-and replace the installed executable, then remove and recreate the Codex MCP
+After changing the code, run the installer again to rebuild and replace the
+executable, reinstall the man page, and remove and recreate the Codex MCP
 entry:
 
 ```sh
-cargo build --release
-cargo install --path . --force
-codex mcp remove shared-terminal
-codex mcp add shared-terminal -- "$HOME/.cargo/bin/shared-terminal" mcp
+./install.sh
 ```
 
 Restart Codex after re-registering so it starts the updated MCP server. The
-`codex mcp add` command has no `--force` option; removing the existing entry
-first ensures the new registration replaces it. Start a fresh terminal session
-with `shared-terminal --local` or `shared-terminal user@host` to use the newly
+installer removes the existing entry first because `codex mcp add` has no
+`--force` option. Start a fresh terminal session with
+`shared-terminal --local` or `shared-terminal user@host` to use the newly
 installed TUI as well.
 
 ## Security and secrets
