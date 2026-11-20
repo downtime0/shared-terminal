@@ -77,6 +77,13 @@ struct Response {
 
 type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 type Transcript = Arc<Mutex<String>>;
+
+#[derive(Clone, Copy)]
+enum PasswordPromptKind {
+    Sudo,
+    Other,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     if let Some(command) = cli.command {
@@ -176,8 +183,8 @@ fn run_mcp() -> Result<()> {
             }),
             "ping" => serde_json::json!({}),
             "tools/list" => serde_json::json!({"tools": [
-                {"name":"terminal_read","description":"Read recent output (up to 120 lines) from the active shared-terminal session. The session may be a local shell or an SSH connection. Start the visible TUI first; this returns an error when no session is running.","inputSchema":{"type":"object","properties":{}}},
-                {"name":"terminal_send","description":"Type the supplied text into the active shared terminal and press Enter. This runs in the selected shell (locally for --local, or remotely for SSH) and is visible to the user in the TUI. Use this to carry out commands the user requested; it does not start a session.","inputSchema":{"type":"object","properties":{"text":{"type":"string","description":"Text to type into the active local shell or SSH session; Enter is appended automatically."}},"required":["text"]}},
+                {"name":"terminal_read","description":"Read recent output (up to 120 lines) from the active shared-terminal session. Interactive password prompts are clearly flagged. If one appears, stop and wait for the user; never send a password.","inputSchema":{"type":"object","properties":{}}},
+                {"name":"terminal_send","description":"Type the supplied text into the active shared terminal and press Enter. This runs in the selected shell (locally for --local, or remotely for SSH) and is visible to the user in the TUI. If an interactive password prompt is active, input is blocked; stop and wait for the user. Never send a password.","inputSchema":{"type":"object","properties":{"text":{"type":"string","description":"Text to type into the active local shell or SSH session; Enter is appended automatically."}},"required":["text"]}},
                 {"name":"session_status","description":"Check whether the user's visible shared-terminal TUI is running and available for shared interaction.","inputSchema":{"type":"object","properties":{}}}
             ]}),
             "tools/call" => {
@@ -341,7 +348,8 @@ fn run_tui(destination: Option<String>, ssh_args: Vec<String>) -> Result<()> {
             }
         }
         let screen = transcript.lock().map(|s| s.clone()).unwrap_or_default();
-        draw(&mut terminal, &screen, &status, scroll)?;
+        let password_prompt = password_prompt_line(&screen);
+        draw(&mut terminal, &screen, &status, scroll, password_prompt)?;
         if event::poll(Duration::from_millis(40))? {
             match event::read()? {
                 Event::Key(key) => {
@@ -407,13 +415,30 @@ fn handle_agent(
     let result = (|| -> Result<String> {
         let request: Request = serde_json::from_str(&line)?;
         match request.action.as_str() {
-            "status" => Ok("session is running".into()),
+            "status" => {
+                let screen = transcript
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("transcript unavailable"))?;
+                if let Some((_, kind)) = password_prompt_line(&screen) {
+                    Ok(match kind {
+                        PasswordPromptKind::Sudo => {
+                            "sudo password prompt detected; waiting for the user. Do not send input."
+                        }
+                        PasswordPromptKind::Other => {
+                            "password prompt detected; waiting for the user. Do not send input."
+                        }
+                    }
+                    .into())
+                } else {
+                    Ok("session is running".into())
+                }
+            }
             "read" => {
                 let log = transcript
                     .lock()
                     .map_err(|_| anyhow::anyhow!("transcript unavailable"))?;
                 let count = request.lines.unwrap_or(120);
-                Ok(log
+                let output = log
                     .lines()
                     .rev()
                     .take(count)
@@ -421,9 +446,29 @@ fn handle_agent(
                     .into_iter()
                     .rev()
                     .collect::<Vec<_>>()
-                    .join("\n"))
+                    .join("\n");
+                if let Some((_, kind)) = password_prompt_line(&log) {
+                    let warning = match kind {
+                        PasswordPromptKind::Sudo => "⚠ SUDO PASSWORD REQUIRED",
+                        PasswordPromptKind::Other => "⚠ PASSWORD REQUIRED",
+                    };
+                    Ok(format!(
+                        "{warning} — waiting for the user; do not send input.\n\n{output}"
+                    ))
+                } else {
+                    Ok(output)
+                }
             }
             "send" => {
+                let screen = transcript
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("transcript unavailable"))?;
+                if password_prompt_line(&screen).is_some() {
+                    bail!(
+                        "password prompt detected; input blocked. Waiting for the user to respond in the visible terminal."
+                    );
+                }
+                drop(screen);
                 let mut text = request.text.unwrap_or_default();
                 text.push('\n');
                 writer
@@ -476,16 +521,48 @@ fn draw(
     screen: &str,
     status: &str,
     scroll: usize,
+    password_prompt: Option<(usize, PasswordPromptKind)>,
 ) -> Result<()> {
     terminal.draw(|frame| {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(5), Constraint::Length(1)])
             .split(frame.area());
-        let lines: Vec<Line> = screen.lines().map(Line::from).collect();
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Shared Terminal · SSH ");
+        let prompt_active = password_prompt.is_some();
+        let prompt_style = Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
+        let lines: Vec<Line> = screen
+            .lines()
+            .enumerate()
+            .map(|(index, line)| {
+                let line = Line::from(line);
+                if password_prompt.map(|(line_index, _)| line_index) == Some(index) {
+                    line.style(prompt_style)
+                } else {
+                    line
+                }
+            })
+            .collect();
+        let block = if let Some((_, kind)) = password_prompt {
+            let title = match kind {
+                PasswordPromptKind::Sudo => " ⚠ SUDO PASSWORD REQUIRED · WAITING FOR USER ",
+                PasswordPromptKind::Other => " ⚠ PASSWORD REQUIRED · WAITING FOR USER ",
+            };
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .title(title)
+        } else {
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Shared Terminal · SSH ")
+        };
         let mut view = Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false });
@@ -495,8 +572,24 @@ fn draw(
         let top = bottom.saturating_sub(available);
         view = view.scroll((top.min(u16::MAX as usize) as u16, 0));
         frame.render_widget(view, chunks[0]);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
+        let footer = if prompt_active {
+            Line::from(vec![
+                Span::styled(
+                    " USER INPUT NEEDED ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " Enter the password in this window; agent input is paused.",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])
+        } else {
+            Line::from(vec![
                 Span::styled(
                     " LIVE ",
                     Style::default()
@@ -507,11 +600,31 @@ fn draw(
                 Span::raw(format!(
                     " {status}  ·  PgUp/PgDn scroll  ·  Ctrl+C interrupt  ·  F12 exit"
                 )),
-            ])),
-            chunks[1],
-        );
+            ])
+        };
+        frame.render_widget(Paragraph::new(footer), chunks[1]);
     })?;
     Ok(())
+}
+
+fn password_prompt_line(screen: &str) -> Option<(usize, PasswordPromptKind)> {
+    let (index, line) = screen
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .last()?;
+    let line = line.trim().to_ascii_lowercase();
+    if line.contains("[sudo] password") || line.contains("sudo password") {
+        Some((index, PasswordPromptKind::Sudo))
+    } else if line == "password:"
+        || line.ends_with("'s password:")
+        || (line.starts_with("password for ") && line.ends_with(':'))
+        || line.starts_with("enter passphrase for key ")
+    {
+        Some((index, PasswordPromptKind::Other))
+    } else {
+        None
+    }
 }
 
 fn ssh_dimensions(width: u16, height: u16) -> (u16, u16) {
